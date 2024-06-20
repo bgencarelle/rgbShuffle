@@ -96,7 +96,6 @@ def process_images(image_path, num_tween_frames, image_format, compression, resi
     frame_index = 0
 
     for idx, order in enumerate(channel_orders):
-        order_str = ''.join(order)
         new_filename = os.path.join(output_dir, f"{base_filename}_{frame_index:04d}.{image_format}")
         save_image_with_new_channels(image, order, new_filename, image_format, compression)
         generated_filenames.append(new_filename)
@@ -131,7 +130,7 @@ def process_images(image_path, num_tween_frames, image_format, compression, resi
             save_image(current_frame, current_generated_filename, image_format, compression)
             frame_index += 1
 
-        # Tween frames to the original RGB image
+        # Calculate and save tween frames to the original RGB image
         tween_args_list.append(
             (current_frame, image, num_tween_frames, base_filename, frame_index, final_dir, image_format, compression))
         frame_index += num_tween_frames
@@ -142,7 +141,7 @@ def process_images(image_path, num_tween_frames, image_format, compression, resi
             save_image(image, original_filename, image_format, compression)
             frame_index += 1
 
-        # Tween frames from the original RGB image to the next generated frame
+        # Calculate and save tween frames from the original RGB image to the next generated frame
         next_frame = generated_images[(i + 1) % num_generated_images] if i + 1 < num_generated_images else current_frame
         tween_args_list.append(
             (image, next_frame, num_tween_frames, base_filename, frame_index, final_dir, image_format, compression))
