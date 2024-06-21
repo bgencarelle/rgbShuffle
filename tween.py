@@ -1,8 +1,7 @@
 import os
 import sys
-from itertools import permutations
-from PIL import Image
 import numpy as np
+from PIL import Image
 from concurrent.futures import ProcessPoolExecutor
 
 
@@ -16,83 +15,171 @@ def save_image(image, filename, image_format, compression):
         print(f"Error saving image {filename}: {e}")
 
 
-def save_image_with_new_channels(args):
-    image, channels_order, filename, image_format, compression = args
-    img_array = np.array(image)
-    channel_map = {'R': 0, 'G': 1, 'B': 2}
-    new_img_array = np.zeros_like(img_array)
+def generate_tween_frames(image1, image2, num_tween_frames, start_index, base_filename, final_dir, image_format,
+                          compression, counter):
+    img_array1 = np.array(image1)
+    img_array2 = np.array(image2)
+    tween_filenames = []
 
-    for i, ch in enumerate(channels_order):
-        if ch.endswith('inv'):
-            channel_idx = channel_map[ch[0]]
-            new_img_array[..., i] = 255 - img_array[..., channel_idx]
-        else:
-            channel_idx = channel_map[ch]
-            new_img_array[..., i] = img_array[..., channel_idx]
+    for i in range(1, num_tween_frames + 1):
+        weight = i / (num_tween_frames + 1)
+        tween_img_array = (1 - weight) * img_array1 + weight * img_array2
+        tween_img = Image.fromarray(np.uint8(tween_img_array))
+        tween_filename = os.path.join(final_dir,
+                                      f"{base_filename}_{start_index:06d}_tween_{counter:06d}.{image_format}")
+        tween_filenames.append((tween_img, tween_filename))
+        start_index += 1  # Increment frame index for each tween frame
+        counter += 1  # Increment counter for each tween frame
 
-    new_image = Image.fromarray(new_img_array)
-    save_image(new_image, filename, image_format, compression)
-
-
-def generate_channel_orders():
-    base_channels = ['R', 'G', 'B']
-    all_channels = base_channels + [ch + 'inv' for ch in base_channels]
-    permutations_list = list(permutations(all_channels, 3))
-    return permutations_list
+    return tween_filenames, counter
 
 
 def resize_image(image, width):
-    if width == 0:
-        return image
     ratio = width / float(image.size[0])
     height = int((float(image.size[1]) * float(ratio)))
     return image.resize((width, height), Image.LANCZOS)
 
 
-def process_images(image_path, image_format, compression, resize_width):
-    image = Image.open(image_path)
-    base_filename = os.path.splitext(os.path.basename(image_path))[0]
+def setup_output_folder(center_image_path, input_folder):
+    base_filename = os.path.splitext(os.path.basename(center_image_path))[0]
+    source_folder_name = os.path.basename(os.path.normpath(input_folder))
+    output_folder = os.path.join(os.path.dirname(center_image_path), f"{base_filename}_{source_folder_name}_tween")
+    if not os.path.exists(output_folder):
+        os.makedirs(output_folder)
+    return output_folder
 
-    # Resize image if required
-    image = resize_image(image, resize_width)
 
-    shuffled_dir = os.path.join(os.path.dirname(image_path), f"{base_filename}_shuffled")
+def load_and_resize_images(input_folder, resize_width):
+    input_files = sorted([f for f in os.listdir(input_folder) if os.path.isfile(os.path.join(input_folder, f))])
+    input_images = [Image.open(os.path.join(input_folder, f)) for f in input_files]
+    resized_images = [resize_image(img, resize_width) for img in input_images]
+    return resized_images
 
-    if not os.path.exists(shuffled_dir):
-        os.makedirs(shuffled_dir)
 
-    channel_orders = generate_channel_orders()
+def save_frames_and_tweens(center_image, resized_images, num_tween_frames, image_format, compression, repeat_frames,
+                           output_folder, base_filename, source_folder_name):
     frame_index = 0
-    tasks = []
-
-    for idx, order in enumerate(channel_orders):
-        order_str = ''.join(order)
-        new_filename = os.path.join(shuffled_dir, f"{base_filename}_{frame_index:04d}_{order_str}_0.{image_format}")
-        tasks.append((image, order, new_filename, image_format, compression))
-        frame_index += 1
+    counter = 0  # Initialize counter for unique naming
+    total_files = 0
+    anticipated_files = len(resized_images) * (repeat_frames * 2 + num_tween_frames * 2)
 
     with ProcessPoolExecutor() as executor:
-        executor.map(save_image_with_new_channels, tasks)
+        for i, current_frame in enumerate(resized_images):
+            # Save the current frame multiple times
+            for _ in range(repeat_frames):
+                current_generated_filename = os.path.join(output_folder,
+                                                          f"{base_filename}_{source_folder_name}_{frame_index:06d}_frame_{counter:06d}.{image_format}")
+                save_image(current_frame, current_generated_filename, image_format, compression)
+                frame_index += 1
+                counter += 1  # Increment counter for each frame
+                total_files += 1
+
+            # Generate and save tween frames to the center image
+            tween_filenames, counter = generate_tween_frames(current_frame, center_image, num_tween_frames, frame_index,
+                                                             f"{base_filename}_{source_folder_name}", output_folder,
+                                                             image_format, compression, counter)
+            for tween_img, tween_filename in tween_filenames:
+                save_image(tween_img, tween_filename, image_format, compression)
+                frame_index += 1  # Increment frame index for each tween frame
+                total_files += 1
+
+            # Save the center image multiple times
+            for _ in range(repeat_frames):
+                center_filename = os.path.join(output_folder,
+                                               f"{base_filename}_{source_folder_name}_{frame_index:06d}_center_{counter:06d}.{image_format}")
+                save_image(center_image, center_filename, image_format, compression)
+                frame_index += 1  # Increment frame index for each center image
+                counter += 1  # Increment counter for each frame
+                total_files += 1
+
+            # Generate and save tween frames from the center image to the next frame
+            if i + 1 < len(resized_images):
+                next_frame = resized_images[i + 1]
+                tween_filenames, counter = generate_tween_frames(center_image, next_frame, num_tween_frames,
+                                                                 frame_index, f"{base_filename}_{source_folder_name}",
+                                                                 output_folder, image_format, compression, counter)
+                for tween_img, tween_filename in tween_filenames:
+                    save_image(tween_img, tween_filename, image_format, compression)
+                    frame_index += 1  # Increment frame index for each tween frame
+                    total_files += 1
+
+    return anticipated_files, total_files
+
+
+def process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width,
+                         repeat_frames):
+    center_image = Image.open(center_image_path)
+    center_image = resize_image(center_image, resize_width)
+    base_filename = os.path.splitext(os.path.basename(center_image_path))[0]
+    source_folder_name = os.path.basename(os.path.normpath(input_folder))
+
+    output_folder = setup_output_folder(center_image_path, input_folder)
+    resized_images = load_and_resize_images(input_folder, resize_width)
+
+    anticipated_files, total_files = save_frames_and_tweens(center_image, resized_images, num_tween_frames,
+                                                            image_format, compression, repeat_frames, output_folder,
+                                                            base_filename, source_folder_name)
+
+    print(f"Anticipated number of files: {anticipated_files}")
+    print(f"Actual number of files: {total_files}")
+
+
+def get_user_input():
+    print("Please enter the following details:")
+
+    input_folder = input("Enter the path to the folder containing the image sequence: ")
+    while not os.path.isdir(input_folder):
+        print("Invalid folder path. Please try again.")
+        input_folder = input("Enter the path to the folder containing the image sequence: ")
+
+    center_image_path = input("Enter the path to the center image: ")
+    while not os.path.isfile(center_image_path):
+        print("Invalid file path. Please try again.")
+        center_image_path = input("Enter the path to the center image: ")
+
+    try:
+        num_tween_frames = int(input("Enter the number of tween frames to generate: "))
+        while num_tween_frames <= 0:
+            print("Number of tween frames must be a positive integer. Please try again.")
+            num_tween_frames = int(input("Enter the number of tween frames to generate: "))
+    except ValueError:
+        print("Invalid input. Please enter a positive integer.")
+        sys.exit(1)
+
+    image_format = input("Enter the image format (default is png, or type webp for webp): ").lower()
+    if image_format not in ['png', 'webp', '']:
+        print("Invalid format. Supported formats are png and webp. Defaulting to png.")
+        image_format = 'png'
+    if image_format == '':
+        image_format = 'png'
+
+    compression = 1 if image_format == 'webp' else 0
+
+    try:
+        resize_width = int(input("Enter the width to resize images to (maintaining aspect ratio): "))
+        while resize_width <= 0:
+            print("Resize width must be a positive integer. Please try again.")
+            resize_width = int(input("Enter the width to resize images to (maintaining aspect ratio): "))
+    except ValueError:
+        print("Invalid input. Please enter a positive integer.")
+        sys.exit(1)
+
+    try:
+        repeat_frames = int(input("Enter the number of times to repeat each frame: "))
+        while repeat_frames <= 0:
+            print("Repeat frames must be a positive integer. Please try again.")
+            repeat_frames = int(input("Enter the number of times to repeat each frame: "))
+    except ValueError:
+        print("Invalid input. Please enter a positive integer.")
+        sys.exit(1)
+
+    return input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width, repeat_frames
 
 
 def main():
-    if len(sys.argv) != 5:
-        print("Usage: python generate_shuffled_images.py <image_path> <image_format> <compression> <resize_width>")
-        print("Format options: png, webp")
-        print("Compression: 0 for lossy WebP, 1 for lossless WebP (ignored for PNG)")
-        print("Resize width: 0 for no resizing")
-        sys.exit(1)
-
-    image_path = sys.argv[1]
-    image_format = sys.argv[2]
-    compression = bool(int(sys.argv[3]))
-    resize_width = int(sys.argv[4])
-
-    if image_format not in ['png', 'webp']:
-        print("Invalid format. Supported formats are png and webp.")
-        sys.exit(1)
-
-    process_images(image_path, image_format, compression, resize_width)
+    input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width, repeat_frames = get_user_input()
+    process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width,
+                         repeat_frames)
 
 
 if __name__ == "__main__":
