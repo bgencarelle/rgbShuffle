@@ -1,7 +1,7 @@
 import os
 import sys
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 from concurrent.futures import ProcessPoolExecutor
 
 
@@ -34,26 +34,46 @@ def generate_tween_frames(image1, image2, num_tween_frames, start_index, base_fi
     return tween_filenames, counter
 
 
-def resize_image(image, width):
-    ratio = width / float(image.size[0])
-    height = int((float(image.size[1]) * float(ratio)))
-    return image.resize((width, height), Image.LANCZOS)
-
-
 def setup_output_folder(center_image_path, input_folder):
     base_filename = os.path.splitext(os.path.basename(center_image_path))[0]
     source_folder_name = os.path.basename(os.path.normpath(input_folder))
-    output_folder = os.path.join(os.path.dirname(center_image_path), f"{base_filename}_{source_folder_name}_tween")
+    parent_dir = os.path.dirname(os.path.normpath(input_folder))  # Get the parent directory of the input folder
+    output_folder = os.path.join(parent_dir, f"{base_filename}_{source_folder_name}_tween")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     return output_folder
 
 
-def load_and_resize_images(input_folder, resize_width):
+def letterbox_image(image, size):
+    """
+    Resize and letterbox the image to fit within the specified size.
+    """
+    return ImageOps.fit(image, size, Image.LANCZOS, 0, (0.5, 0.5))
+
+
+def process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, repeat_frames):
     input_files = sorted([f for f in os.listdir(input_folder) if os.path.isfile(os.path.join(input_folder, f))])
     input_images = [Image.open(os.path.join(input_folder, f)) for f in input_files]
-    resized_images = [resize_image(img, resize_width) for img in input_images]
-    return resized_images
+
+    # Get the size from the first image in the folder
+    target_size = input_images[0].size
+
+    # Ensure center image is the same format and size as input images
+    center_image = Image.open(center_image_path).convert(input_images[0].mode)
+    if center_image.size != target_size:
+        center_image = letterbox_image(center_image, target_size)
+
+    base_filename = os.path.splitext(os.path.basename(center_image_path))[0]
+    source_folder_name = os.path.basename(os.path.normpath(input_folder))
+    output_folder = setup_output_folder(center_image_path, input_folder)
+
+    anticipated_files = len(input_images) * (repeat_frames * 2 + num_tween_frames * 2)
+    print(f"Anticipated number of files: {anticipated_files}")
+
+    total_files = save_frames_and_tweens(center_image, input_images, num_tween_frames, image_format, compression,
+                                         repeat_frames, output_folder, base_filename, source_folder_name)
+
+    print(f"Actual number of files: {total_files}")
 
 
 def save_frames_and_tweens(center_image, resized_images, num_tween_frames, image_format, compression, repeat_frames,
@@ -61,10 +81,11 @@ def save_frames_and_tweens(center_image, resized_images, num_tween_frames, image
     frame_index = 0
     counter = 0  # Initialize counter for unique naming
     total_files = 0
-    anticipated_files = len(resized_images) * (repeat_frames * 2 + num_tween_frames * 2)
 
     with ProcessPoolExecutor() as executor:
         for i, current_frame in enumerate(resized_images):
+            print(f"Processing file: {os.path.basename(resized_images[i].filename)}")
+
             # Save the current frame multiple times
             for _ in range(repeat_frames):
                 current_generated_filename = os.path.join(output_folder,
@@ -80,6 +101,7 @@ def save_frames_and_tweens(center_image, resized_images, num_tween_frames, image
                                                              image_format, compression, counter)
             for tween_img, tween_filename in tween_filenames:
                 save_image(tween_img, tween_filename, image_format, compression)
+                print(f"Generated tween file: {os.path.basename(tween_filename)}")
                 frame_index += 1  # Increment frame index for each tween frame
                 total_files += 1
 
@@ -100,28 +122,11 @@ def save_frames_and_tweens(center_image, resized_images, num_tween_frames, image
                                                                  output_folder, image_format, compression, counter)
                 for tween_img, tween_filename in tween_filenames:
                     save_image(tween_img, tween_filename, image_format, compression)
+                    print(f"Generated tween file: {os.path.basename(tween_filename)}")
                     frame_index += 1  # Increment frame index for each tween frame
                     total_files += 1
 
-    return anticipated_files, total_files
-
-
-def process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width,
-                         repeat_frames):
-    center_image = Image.open(center_image_path)
-    center_image = resize_image(center_image, resize_width)
-    base_filename = os.path.splitext(os.path.basename(center_image_path))[0]
-    source_folder_name = os.path.basename(os.path.normpath(input_folder))
-
-    output_folder = setup_output_folder(center_image_path, input_folder)
-    resized_images = load_and_resize_images(input_folder, resize_width)
-
-    anticipated_files, total_files = save_frames_and_tweens(center_image, resized_images, num_tween_frames,
-                                                            image_format, compression, repeat_frames, output_folder,
-                                                            base_filename, source_folder_name)
-
-    print(f"Anticipated number of files: {anticipated_files}")
-    print(f"Actual number of files: {total_files}")
+    return total_files
 
 
 def get_user_input():
@@ -156,15 +161,6 @@ def get_user_input():
     compression = 1 if image_format == 'webp' else 0
 
     try:
-        resize_width = int(input("Enter the width to resize images to (maintaining aspect ratio): "))
-        while resize_width <= 0:
-            print("Resize width must be a positive integer. Please try again.")
-            resize_width = int(input("Enter the width to resize images to (maintaining aspect ratio): "))
-    except ValueError:
-        print("Invalid input. Please enter a positive integer.")
-        sys.exit(1)
-
-    try:
         repeat_frames = int(input("Enter the number of times to repeat each frame: "))
         while repeat_frames <= 0:
             print("Repeat frames must be a positive integer. Please try again.")
@@ -173,13 +169,12 @@ def get_user_input():
         print("Invalid input. Please enter a positive integer.")
         sys.exit(1)
 
-    return input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width, repeat_frames
+    return input_folder, center_image_path, num_tween_frames, image_format, compression, repeat_frames
 
 
 def main():
-    input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width, repeat_frames = get_user_input()
-    process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, resize_width,
-                         repeat_frames)
+    input_folder, center_image_path, num_tween_frames, image_format, compression, repeat_frames = get_user_input()
+    process_tween_images(input_folder, center_image_path, num_tween_frames, image_format, compression, repeat_frames)
 
 
 if __name__ == "__main__":
