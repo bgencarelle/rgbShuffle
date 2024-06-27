@@ -122,10 +122,10 @@ def process_folder(input_folder_path, output_folder_base, output_format, folder_
                 if not os.path.exists(output_folder_path_ccm):
                     os.makedirs(output_folder_path_ccm)
 
-                output_image_path_matrix = os.path.join(output_folder_path_matrix,
-                                                        os.path.splitext(filename)[0] + '_wb.' + output_format)
-                output_image_path_ccm = os.path.join(output_folder_path_ccm,
-                                                     os.path.splitext(filename)[0] + '_ccm.' + output_format)
+                output_image_path_matrix = os.path.join('wb_' + output_folder_path_matrix,
+                                                        os.path.splitext(filename)[0] + '.' + output_format)
+                output_image_path_ccm = os.path.join('ccm' + output_folder_path_ccm,
+                                                     os.path.splitext(filename)[0] + '.' + output_format)
 
                 process_image_file(input_image_path, output_image_path_matrix, output_image_path_ccm)
 
